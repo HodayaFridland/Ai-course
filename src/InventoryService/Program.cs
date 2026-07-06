@@ -1,8 +1,19 @@
+using InventoryService.Consumers;
 using InventoryService.Data;
+using InventoryService.Messaging;
 using InventoryService.Services;
 using Microsoft.EntityFrameworkCore;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// --- Structured logging to console + Seq (Phase 5) ---
+builder.Host.UseSerilog((context, config) => config
+    .MinimumLevel.Information()
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("Service", "InventoryService")
+    .WriteTo.Console()
+    .WriteTo.Seq(context.Configuration["Seq:ServerUrl"] ?? "http://seq:5341"));
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -15,6 +26,10 @@ builder.Services.AddDbContext<InventoryDbContext>(options =>
         sql => sql.EnableRetryOnFailure()));
 
 builder.Services.AddScoped<IStockService, StockService>();
+
+// Phase 4: listen for OrderPlaced events and answer with reserved/rejected.
+builder.Services.AddSingleton<RabbitMqEventBus>();
+builder.Services.AddHostedService<InventorySagaConsumer>();
 
 var app = builder.Build();
 

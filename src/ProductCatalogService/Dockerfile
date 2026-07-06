@@ -13,6 +13,8 @@ RUN dotnet publish -c Release -o /app
 # --- Stage 2: lightweight runtime image ---
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
+# curl: used by the docker-compose healthcheck to probe /health (Phase 5).
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app ./
 
 # Kestrel listens on 8080 inside the container.

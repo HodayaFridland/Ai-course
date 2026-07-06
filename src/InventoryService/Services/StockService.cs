@@ -56,31 +56,44 @@ public class StockService : IStockService
     /// </summary>
     public async Task<ReserveResult> ReserveAsync(ReserveRequest request)
     {
-        await using var transaction = await _db.Database.BeginTransactionAsync();
+        var strategy = _db.Database.CreateExecutionStrategy();
 
-        foreach (var line in request.Items)
+        return await strategy.ExecuteAsync(async () =>
         {
-            // A single atomic SQL UPDATE with a WHERE guard. Returns the number of rows changed.
-            // If AvailableStock < Quantity, zero rows change → we cannot fulfil this line.
-            var affected = await _db.InventoryItems
-                .Where(i => i.ProductId == line.ProductId && i.AvailableStock >= line.Quantity)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(i => i.AvailableStock, i => i.AvailableStock - line.Quantity)
-                    .SetProperty(i => i.ReservedStock, i => i.ReservedStock + line.Quantity));
+            await using var transaction = await _db.Database.BeginTransactionAsync();
 
-            if (affected == 0)
+            try
+            {
+                foreach (var line in request.Items)
+                {
+                    // A single atomic SQL UPDATE with a WHERE guard. Returns the number of rows changed.
+                    // If AvailableStock < Quantity, zero rows change → we cannot fulfil this line.
+                    var affected = await _db.InventoryItems
+                        .Where(i => i.ProductId == line.ProductId && i.AvailableStock >= line.Quantity)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(i => i.AvailableStock, i => i.AvailableStock - line.Quantity)
+                            .SetProperty(i => i.ReservedStock, i => i.ReservedStock + line.Quantity));
+
+                    if (affected == 0)
+                    {
+                        await transaction.RollbackAsync();
+                        var reason = $"Insufficient stock for product '{line.ProductId}'.";
+                        _logger.LogWarning("Order {OrderId} reservation REJECTED: {Reason}", request.OrderId, reason);
+                        return new ReserveResult(false, reason);
+                    }
+                }
+
+                await transaction.CommitAsync();
+                _logger.LogInformation("Order {OrderId} reservation CONFIRMED for {Count} item(s).",
+                    request.OrderId, request.Items.Count);
+                return new ReserveResult(true, null);
+            }
+            catch
             {
                 await transaction.RollbackAsync();
-                var reason = $"Insufficient stock for product '{line.ProductId}'.";
-                _logger.LogWarning("Order {OrderId} reservation REJECTED: {Reason}", request.OrderId, reason);
-                return new ReserveResult(false, reason);
+                throw;
             }
-        }
-
-        await transaction.CommitAsync();
-        _logger.LogInformation("Order {OrderId} reservation CONFIRMED for {Count} item(s).",
-            request.OrderId, request.Items.Count);
-        return new ReserveResult(true, null);
+        });
     }
 
     /// <summary>
@@ -89,15 +102,32 @@ public class StockService : IStockService
     /// </summary>
     public async Task ReleaseAsync(ReserveRequest request)
     {
-        foreach (var line in request.Items)
+        var strategy = _db.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(async () =>
         {
-            // Only release what was actually reserved (guard prevents ReservedStock going negative).
-            await _db.InventoryItems
-                .Where(i => i.ProductId == line.ProductId && i.ReservedStock >= line.Quantity)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(i => i.AvailableStock, i => i.AvailableStock + line.Quantity)
-                    .SetProperty(i => i.ReservedStock, i => i.ReservedStock - line.Quantity));
-        }
-        _logger.LogInformation("Order {OrderId} reservation RELEASED (compensation).", request.OrderId);
+            await using var transaction = await _db.Database.BeginTransactionAsync();
+
+            try
+            {
+                foreach (var line in request.Items)
+                {
+                    // Only release what was actually reserved (guard prevents ReservedStock going negative).
+                    await _db.InventoryItems
+                        .Where(i => i.ProductId == line.ProductId && i.ReservedStock >= line.Quantity)
+                        .ExecuteUpdateAsync(setters => setters
+                            .SetProperty(i => i.AvailableStock, i => i.AvailableStock + line.Quantity)
+                            .SetProperty(i => i.ReservedStock, i => i.ReservedStock - line.Quantity));
+                }
+
+                await transaction.CommitAsync();
+                _logger.LogInformation("Order {OrderId} reservation RELEASED (compensation).", request.OrderId);
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        });
     }
 }

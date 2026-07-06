@@ -1,7 +1,18 @@
 using ProductCatalogService.Data;
 using ProductCatalogService.Repositories;
+using ProductCatalogService.Services;
+using Serilog;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// --- Structured logging to console + Seq (Phase 5) ---
+builder.Host.UseSerilog((context, config) => config
+    .MinimumLevel.Information()
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("Service", "ProductCatalogService")
+    .WriteTo.Console()
+    .WriteTo.Seq(context.Configuration["Seq:ServerUrl"] ?? "http://seq:5341"));
 
 // --- Services (dependency injection) ---
 builder.Services.AddControllers();
@@ -14,8 +25,20 @@ builder.Services.Configure<CatalogDbSettings>(builder.Configuration.GetSection("
 // MongoContext is a singleton (the Mongo driver manages its own connection pool).
 builder.Services.AddSingleton<MongoContext>();
 
+// --- Distributed cache: Redis (Phase 4, cache-aside) ---
+// abortConnect=false lets the app start even if Redis is momentarily unreachable.
+var redisConnection = builder.Configuration["Redis:Connection"] ?? "localhost:6379";
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    _ => ConnectionMultiplexer.Connect($"{redisConnection},abortConnect=false"));
+builder.Services.AddSingleton<ICatalogCache, RedisCatalogCache>();
+
 // Repositories can be singletons too here — they hold no per-request state.
-builder.Services.AddSingleton<IProductRepository, ProductRepository>();
+builder.Services.AddSingleton<ProductRepository>();
+builder.Services.AddSingleton<IProductRepository>(sp =>
+    new CachedProductRepository(
+        sp.GetRequiredService<ProductRepository>(),
+        sp.GetRequiredService<ICatalogCache>(),
+        sp.GetRequiredService<ILogger<CachedProductRepository>>()));
 builder.Services.AddSingleton<ICategoryRepository, CategoryRepository>();
 
 var app = builder.Build();

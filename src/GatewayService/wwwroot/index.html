@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>חנות — לוח בקרה (דרך ה-Gateway)</title>
+  <style>
+    :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --text:#e2e8f0; --muted:#94a3b8;
+            --accent:#38bdf8; --green:#22c55e; --red:#ef4444; --amber:#f59e0b; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Segoe UI",Arial,sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:18px 24px; background:#0b1220; border-bottom:1px solid var(--line); }
+    header h1 { margin:0; font-size:20px; }
+    header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+    .wrap { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:20px; max-width:1200px; margin:0 auto; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+    .card h2 { margin:0 0 12px; font-size:15px; color:var(--accent); display:flex; justify-content:space-between; align-items:center; }
+    button { background:var(--accent); color:#03242f; border:0; border-radius:8px; padding:7px 12px;
+             font-weight:600; cursor:pointer; font-size:13px; }
+    button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+    button:hover { opacity:.9; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:600; }
+    select,input { background:#0b1220; color:var(--text); border:1px solid var(--line);
+                   border-radius:8px; padding:7px; font-size:13px; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+    .pill { padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }
+    .Confirmed { background:rgba(34,197,94,.15); color:var(--green); }
+    .Cancelled { background:rgba(239,68,68,.15); color:var(--red); }
+    .Pending   { background:rgba(245,158,11,.15); color:var(--amber); }
+    .Rejected  { background:rgba(239,68,68,.15); color:var(--red); }
+    pre { background:#0b1220; border:1px solid var(--line); border-radius:8px; padding:10px;
+          font-size:12px; overflow:auto; max-height:260px; margin:0; }
+    .muted { color:var(--muted); font-size:12px; }
+    .full { grid-column:1 / -1; }
+    .lb-row { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding:4px 0; font-size:13px; }
+    code { background:#0b1220; padding:1px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🛒 מערכת הזמנות — לוח בקרה</h1>
+    <p>כל הקריאות יוצאות ל-<code>/api/...</code> על ה-<b>Gateway</b> (פורט 5204) בלבד. השירותים עצמם אינם חשופים ישירות.</p>
+  </header>
+
+  <div class="wrap">
+
+    <!-- Catalog -->
+    <div class="card">
+      <h2>מוצרים (Catalog · MongoDB) <button class="ghost" onclick="loadProducts()">רענן</button></h2>
+      <table><thead><tr><th>מזהה</th><th>שם</th><th>מחיר</th><th>קטגוריה</th></tr></thead>
+        <tbody id="products"></tbody></table>
+    </div>
+
+    <!-- Inventory -->
+    <div class="card">
+      <h2>מלאי (Inventory · SQL Server) <button class="ghost" onclick="loadInventory()">רענן</button></h2>
+      <table><thead><tr><th>מוצר</th><th>זמין</th><th>שמור</th></tr></thead>
+        <tbody id="inventory"></tbody></table>
+    </div>
+
+    <!-- Place order -->
+    <div class="card">
+      <h2>ביצוע הזמנה (Order)</h2>
+      <div class="row">
+        <select id="prod"></select>
+        <input id="qty" type="number" value="1" min="1" style="width:70px" />
+        <button onclick="placeOrder()">בצע הזמנה</button>
+      </div>
+      <div id="orderResult" class="muted">בחרי מוצר וכמות. נסי גם <b>Wireless Mouse</b> (מלאי 0) כדי לראות דחייה.</div>
+    </div>
+
+    <!-- Notifications -->
+    <div class="card">
+      <h2>התראות ללקוח (Notification · MongoDB) <button class="ghost" onclick="loadNotifications()">רענן</button></h2>
+      <table><thead><tr><th>הזמנה</th><th>סטטוס</th><th>הודעה</th></tr></thead>
+        <tbody id="notifications"></tbody></table>
+    </div>
+
+    <!-- Orders -->
+    <div class="card full">
+      <h2>הזמנות (Order · SQL Server) <button class="ghost" onclick="loadOrders()">רענן</button></h2>
+      <table><thead><tr><th>#</th><th>סטטוס</th><th>סכום</th><th>כתובת</th><th>פריטים</th><th>BFF</th></tr></thead>
+        <tbody id="orders"></tbody></table>
+    </div>
+
+    <!-- BFF -->
+    <div class="card">
+      <h2>BFF — פרטי הזמנה מאוחדים</h2>
+      <p class="muted">מאחד נתונים מ-<b>OrderService + ProductCatalogService</b> בקריאה אחת.</p>
+      <div class="row">
+        <input id="bffId" type="number" placeholder="מספר הזמנה" style="width:120px" />
+        <button onclick="loadBff()">קבל פרטים</button>
+      </div>
+      <pre id="bffOut">—</pre>
+    </div>
+
+    <!-- Load balancing -->
+    <div class="card">
+      <h2>הוכחת Load Balancing (2 עותקי Catalog)</h2>
+      <p class="muted">קורא <code>/api/products</code> 8 פעמים דרך ה-Gateway ומציג את ה-<code>X-Instance-Id</code> (מזהה הקונטיינר) שענה לכל קריאה. שני מזהים שונים = איזון עומסים עובד.</p>
+      <button onclick="testLB()">הרץ 8 קריאות</button>
+      <div id="lbOut" style="margin-top:10px"></div>
+    </div>
+
+  </div>
+
+<script>
+const api = (p, opt) => fetch(p, opt);
+let products = [];
+
+async function loadProducts() {
+  const r = await api('/api/products'); products = await r.json();
+  document.getElementById('products').innerHTML = products.map(p =>
+    `<tr><td>${p.id}</td><td>${p.name}</td><td>₪${p.price}</td><td>${p.categoryName}</td></tr>`).join('');
+  document.getElementById('prod').innerHTML = products.map(p =>
+    `<option value="${p.id}">${p.name} — ₪${p.price}</option>`).join('');
+}
+
+async function loadInventory() {
+  const r = await api('/api/inventory'); const inv = await r.json();
+  document.getElementById('inventory').innerHTML = inv.map(i =>
+    `<tr><td>${i.productId}</td><td>${i.availableStock}</td><td>${i.reservedStock}</td></tr>`).join('');
+}
+
+async function loadOrders() {
+  const r = await api('/api/orders'); const orders = await r.json();
+  document.getElementById('orders').innerHTML = orders.map(o =>
+    `<tr><td>${o.id}</td><td><span class="pill ${o.status}">${o.status}</span></td>
+      <td>₪${o.totalAmount}</td><td>${o.shippingAddress}</td>
+      <td>${o.items.map(i=>`${i.productName}×${i.quantity}`).join(', ')}</td>
+      <td><button class="ghost" onclick="document.getElementById('bffId').value=${o.id};loadBff()">הצג</button></td></tr>`).join('');
+}
+
+async function loadNotifications() {
+  const r = await api('/api/notifications'); const n = await r.json();
+  document.getElementById('notifications').innerHTML = n.map(x =>
+    `<tr><td>#${x.orderId}</td><td><span class="pill ${x.status}">${x.status}</span></td><td>${x.message}</td></tr>`).join('');
+}
+
+async function placeOrder() {
+  const productId = document.getElementById('prod').value;
+  const quantity = parseInt(document.getElementById('qty').value) || 1;
+  const box = document.getElementById('orderResult');
+  box.textContent = 'שולח...';
+  const r = await api('/api/orders', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ userId:1, shippingAddress:'Tel Aviv', items:[{ productId, quantity }] })
+  });
+  const o = await r.json();
+  // Async saga: the order comes back "Pending" and flips to Confirmed/Cancelled a moment later.
+  box.innerHTML = `הזמנה <b>#${o.id}</b> — <span class="pill Pending">Pending</span> · ה-saga רץ ברקע דרך RabbitMQ...`;
+
+  // Poll the order a few times until the saga finishes.
+  for (const delay of [700, 1500, 3000]) {
+    await new Promise(res => setTimeout(res, delay));
+    const res = await api('/api/orders/' + o.id);
+    if (res.ok) {
+      const cur = await res.json();
+      box.innerHTML = `הזמנה <b>#${cur.id}</b> — <span class="pill ${cur.status}">${cur.status}</span> · סה"כ ₪${cur.totalAmount}`;
+      loadInventory(); loadOrders(); loadNotifications();
+      if (cur.status !== 'Pending') break;
+    }
+  }
+}
+
+async function loadBff() {
+  const id = document.getElementById('bffId').value;
+  if (!id) return;
+  const r = await api('/api/bff/orders/'+id+'/details');
+  document.getElementById('bffOut').textContent = r.ok
+    ? JSON.stringify(await r.json(), null, 2)
+    : 'הזמנה '+id+' לא נמצאה ('+r.status+')';
+}
+
+async function testLB() {
+  const out = document.getElementById('lbOut'); out.innerHTML = '';
+  const counts = {};
+  for (let i=1;i<=8;i++){
+    const r = await api('/api/products');
+    const id = r.headers.get('X-Instance-Id') || '(לא זוהה)';
+    counts[id] = (counts[id]||0)+1;
+    out.innerHTML += `<div class="lb-row"><span>קריאה ${i}</span><code>${id}</code></div>`;
+  }
+  const summary = Object.entries(counts).map(([k,v])=>`${k}: ${v}`).join(' · ');
+  out.innerHTML += `<div style="margin-top:8px;color:var(--green)"><b>${Object.keys(counts).length} קונטיינרים שונים ענו</b> — ${summary}</div>`;
+}
+
+// initial load
+loadProducts(); loadInventory(); loadOrders(); loadNotifications();
+</script>
+</body>
+</html>

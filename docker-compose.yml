@@ -1,13 +1,14 @@
 # ============================================================================
-#  Root docker-compose — runs the whole microservices system with one command:
+#  Root docker-compose — runs the WHOLE system with one command:
 #      docker compose up --build
 #
-#  Phase 2 scope: 2 databases (SQL Server + MongoDB) and the 4 services.
-#  (Redis, RabbitMQ, Seq, Gateway and BFF are added in later phases.)
+#  Infrastructure : SQL Server, MongoDB, Redis, RabbitMQ, Seq (log aggregator)
+#  Microservices  : Catalog (x2 replicas), Inventory, Notification, Order
+#  Edge           : Gateway (the only public entry point, :5204) + BFF
 # ============================================================================
 services:
 
-  # ---------- Databases ----------
+  # ---------- Databases & infrastructure ----------
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
     container_name: sqlserver
@@ -39,66 +40,215 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"      # AMQP (services connect here)
+      - "15672:15672"    # management UI: http://localhost:15672  (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Seq — central structured-log aggregator (Phase 5). Every service writes here via Serilog.
+  seq:
+    image: datalust/seq:latest
+    container_name: seq
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_NOAUTHENTICATION: "true"   # demo: open the UI without a login
+    ports:
+      - "5341:5341"      # log ingestion endpoint (services send logs here)
+      - "8081:80"        # Seq web UI:  http://localhost:8081
+
   # ---------- Microservices ----------
-  catalogservice:
+  # NOTE (Phase 3): the app services below no longer publish host ports.
+  # They are reachable ONLY inside the Docker network — the single public
+  # entry point is the gateway (port 5204). This satisfies the Phase 3 rule
+  # "services are no longer exposed directly".
+  #
+  # Every app service also has a /health endpoint wired into a docker-compose
+  # healthcheck below (Phase 5, Task 5.2).
+
+  # ProductCatalogService runs as TWO replicas behind the gateway's load
+  # balancer (Task 3.3). Both share the network alias "catalogservice".
+  catalogservice-1:
     build:
       context: ./src/ProductCatalogService
-    container_name: catalogservice
-    ports:
-      - "5201:8080"
+    image: aiproject-catalogservice
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       CatalogDatabase__ConnectionString: "mongodb://mongo:27017"
+      Redis__Connection: "redis:6379"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      default:
+        aliases:
+          - catalogservice
+
+  catalogservice-2:
+    image: aiproject-catalogservice
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      CatalogDatabase__ConnectionString: "mongodb://mongo:27017"
+      Redis__Connection: "redis:6379"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      catalogservice-1:
+        condition: service_started
+    networks:
+      default:
+        aliases:
+          - catalogservice
 
   inventoryservice:
     build:
       context: ./src/InventoryService
     container_name: inventoryservice
-    ports:
-      - "5202:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=inventorydb;User Id=sa;Password=Strong@Passw0rd!;TrustServerCertificate=True;"
+      MessageBroker__Host: "rabbitmq"
+      MessageBroker__Queue: "inventory.saga"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       sqlserver:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   notificationservice:
     build:
       context: ./src/NotificationService
     container_name: notificationservice
-    ports:
-      - "5203:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       NotificationDatabase__ConnectionString: "mongodb://mongo:27017"
+      MessageBroker__Host: "rabbitmq"
+      MessageBroker__Queue: "notification.saga"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       mongo:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   orderservice:
     build:
       context: ./src/OrderService
     container_name: orderservice
-    ports:
-      - "5200:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: "Development"
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=ordersdb;User Id=sa;Password=Strong@Passw0rd!;TrustServerCertificate=True;"
       Services__Catalog: "http://catalogservice:8080"
-      Services__Inventory: "http://inventoryservice:8080"
-      Services__Notification: "http://notificationservice:8080"
+      MessageBroker__Host: "rabbitmq"
+      MessageBroker__Queue: "order.saga"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
       sqlserver:
         condition: service_healthy
-      catalogservice:
+      rabbitmq:
+        condition: service_healthy
+      catalogservice-1:
+        condition: service_started
+      catalogservice-2:
+        condition: service_started
+
+  # ---------- Edge: the ONLY public entry point ----------
+  gatewayservice:
+    build:
+      context: ./src/GatewayService
+    container_name: gatewayservice
+    ports:
+      - "5204:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      orderservice:
         condition: service_started
       inventoryservice:
         condition: service_started
       notificationservice:
+        condition: service_started
+      bffservice:
+        condition: service_started
+      catalogservice-1:
+        condition: service_started
+      catalogservice-2:
+        condition: service_started
+
+  bffservice:
+    build:
+      context: ./src/BffService
+    container_name: bffservice
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      Services__OrderService: "http://orderservice:8080/"
+      Services__CatalogService: "http://catalogservice:8080/"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      orderservice:
+        condition: service_started
+      catalogservice-1:
         condition: service_started
 
 volumes:

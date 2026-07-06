@@ -1,0 +1,96 @@
+name: CI
+
+# Runs on every push and pull request (Task B.1).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) Build + run unit tests. A failing test fails the whole pipeline (Task B.2).
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore & run tests
+        run: |
+          dotnet test src/OrderService.Tests/OrderService.Tests.csproj -c Release --nologo
+          dotnet test src/BffService.Tests/BffService.Tests.csproj  -c Release --nologo
+
+  # ---------------------------------------------------------------------------
+  # 2) Detect WHICH service folders changed, so we only rebuild those images
+  #    (answers the hint: "do you really need to rebuild every service?").
+  # ---------------------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            catalogservice: 'src/ProductCatalogService/**'
+            inventoryservice: 'src/InventoryService/**'
+            notificationservice: 'src/NotificationService/**'
+            orderservice: 'src/OrderService/**'
+            gatewayservice: 'src/GatewayService/**'
+            bffservice: 'src/BffService/**'
+
+  # ---------------------------------------------------------------------------
+  # 3) Build a Docker image PER changed service, tagged with the commit SHA
+  #    (Task B.3). Only the services whose folder changed are built.
+  # ---------------------------------------------------------------------------
+  docker:
+    needs: [test, changes]
+    if: needs.changes.outputs.services != '[]' && needs.changes.outputs.services != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve build context
+        id: ctx
+        run: |
+          case "${{ matrix.service }}" in
+            catalogservice)      echo "path=src/ProductCatalogService" >> "$GITHUB_OUTPUT" ;;
+            inventoryservice)    echo "path=src/InventoryService"       >> "$GITHUB_OUTPUT" ;;
+            notificationservice) echo "path=src/NotificationService"    >> "$GITHUB_OUTPUT" ;;
+            orderservice)        echo "path=src/OrderService"           >> "$GITHUB_OUTPUT" ;;
+            gatewayservice)      echo "path=src/GatewayService"         >> "$GITHUB_OUTPUT" ;;
+            bffservice)          echo "path=src/BffService"             >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Build image tagged with the commit SHA
+        run: |
+          docker build -t "ecommerce/${{ matrix.service }}:${{ github.sha }}" "${{ steps.ctx.outputs.path }}"
+          echo "Built ecommerce/${{ matrix.service }}:${{ github.sha }}"
+
+  # ---------------------------------------------------------------------------
+  # 4) Stretch (Task B.4): bring the whole stack up, wait for the gateway to be
+  #    healthy, then tear it down.
+  # ---------------------------------------------------------------------------
+  smoke:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose up
+        run: docker compose up -d --build
+      - name: Wait for the gateway /health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5204/health; then echo "healthy"; exit 0; fi
+            echo "waiting ($i)..."; sleep 5
+          done
+          echo "gateway did not become healthy in time"; docker compose ps; exit 1
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
