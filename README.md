@@ -6,6 +6,50 @@ A .NET 8 e-commerce order system evolved from a monolith into distributed, produ
 microservices: containers, polyglot persistence, API gateway, BFF, load balancing, asynchronous
 messaging, a choreography saga, distributed caching, and centralized observability.
 
+## Run it on any machine — from zero
+
+You do **not** need .NET, SQL Server, MongoDB, Redis or RabbitMQ installed. Everything runs in
+Docker containers. The only thing you install is Docker.
+
+**1. Install Docker Desktop** (once).
+- Windows / macOS: download from https://www.docker.com/products/docker-desktop and install.
+- Linux: install Docker Engine + the Compose plugin.
+- Start Docker Desktop and wait until it says **"Engine running"**. Verify in a terminal:
+  ```bash
+  docker --version
+  docker compose version
+  ```
+
+**2. Get the code** (either one):
+```bash
+# option A — clone with git
+git clone https://github.com/HodayaFridland/Ai-course.git
+cd Ai-course
+
+# option B — download the ZIP from GitHub ("Code" ▸ "Download ZIP"), unzip, and open a
+# terminal inside the unzipped folder.
+```
+
+**3. Start everything with one command** (from the folder that contains `docker-compose.yml`):
+```bash
+docker compose up --build
+```
+The first run downloads the base images (SQL Server, Mongo, Redis, RabbitMQ, Seq ≈ a few GB) and
+builds the services — give it a few minutes. When you see the services logging
+`Now listening on: http://0.0.0.0:8080`, it's ready.
+
+**4. Open the web UI** in a browser: **http://localhost:5204**
+
+**5. Stop it** when you're done (in another terminal, same folder):
+```bash
+docker compose down          # stop and remove the containers
+# docker compose down -v     # ...also wipe the databases (start fresh next time)
+```
+
+> Tips: make sure Docker Desktop has enough disk space (SQL Server alone is ~2.3 GB), and that
+> ports 5204 / 8081 / 15672 are free. If a build fails on a network timeout, just run
+> `docker compose up --build` again — it resumes from where it stopped.
+
 ## One-command startup
 
 ```bash
