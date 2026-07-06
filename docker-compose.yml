@@ -1,0 +1,106 @@
+# ============================================================================
+#  Root docker-compose — runs the whole microservices system with one command:
+#      docker compose up --build
+#
+#  Phase 2 scope: 2 databases (SQL Server + MongoDB) and the 4 services.
+#  (Redis, RabbitMQ, Seq, Gateway and BFF are added in later phases.)
+# ============================================================================
+services:
+
+  # ---------- Databases ----------
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sqlserver
+    environment:
+      MSSQL_SA_PASSWORD: "Strong@Passw0rd!"
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "Strong@Passw0rd!" -C -Q "SELECT 1" -b || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  mongo:
+    image: mongo:7
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------- Microservices ----------
+  catalogservice:
+    build:
+      context: ./src/ProductCatalogService
+    container_name: catalogservice
+    ports:
+      - "5201:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      CatalogDatabase__ConnectionString: "mongodb://mongo:27017"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  inventoryservice:
+    build:
+      context: ./src/InventoryService
+    container_name: inventoryservice
+    ports:
+      - "5202:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=inventorydb;User Id=sa;Password=Strong@Passw0rd!;TrustServerCertificate=True;"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+  notificationservice:
+    build:
+      context: ./src/NotificationService
+    container_name: notificationservice
+    ports:
+      - "5203:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      NotificationDatabase__ConnectionString: "mongodb://mongo:27017"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  orderservice:
+    build:
+      context: ./src/OrderService
+    container_name: orderservice
+    ports:
+      - "5200:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Development"
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=ordersdb;User Id=sa;Password=Strong@Passw0rd!;TrustServerCertificate=True;"
+      Services__Catalog: "http://catalogservice:8080"
+      Services__Inventory: "http://inventoryservice:8080"
+      Services__Notification: "http://notificationservice:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      catalogservice:
+        condition: service_started
+      inventoryservice:
+        condition: service_started
+      notificationservice:
+        condition: service_started
+
+volumes:
+  sqlserver-data:
+  mongo-data:

@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "kSPPD6xEsnGwiWVOlxR/+3qe8nKHDXCuZtvH6TmQ0fE=",
+  "Source": "ProductCatalogService",
+  "BasePath": "_content/ProductCatalogService",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}
