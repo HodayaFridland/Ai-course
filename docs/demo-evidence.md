@@ -2,7 +2,18 @@
 
 All evidence below was captured live from the running system (`docker compose up`), through the
 API Gateway only (`http://localhost:5204`). Log lines are pulled from the services and from the
-central **Seq** aggregator.
+central **Seq** aggregator (`http://localhost:8081`).
+
+## Screenshots
+
+| # | Shows | File | Where it came from |
+|---|-------|------|--------------------|
+| 1 | Web UI dashboard (orders, statuses, notifications) | [screenshots/01-web-ui-dashboard.png](screenshots/01-web-ui-dashboard.png) | browser at http://localhost:5204 |
+| 2 | Saga **happy path** + **correlation-id trace** across services | [screenshots/02-saga-happy-and-correlation.png](screenshots/02-saga-happy-and-correlation.png) | Seq, filter `CorrelationId = '...'` |
+| 3 | Saga **compensation path** (out-of-stock → Cancelled) | [screenshots/03-saga-compensation.png](screenshots/03-saga-compensation.png) | Seq, filter `CorrelationId = '...'` |
+| 4 | Redis **cache hit / miss** | [screenshots/04-cache-hit-miss.png](screenshots/04-cache-hit-miss.png) | Seq, filter `@Message like '%Cache %'` |
+
+The raw log text for each is reproduced below.
 
 ---
 
